@@ -1,19 +1,80 @@
 import { UnifiedChatRequest } from "../types/llm";
 import { Transformer } from "../types/transformer";
+import { reasoningCacheService } from "../services/reasoning-cache.service";
 
 export class DeepseekTransformer implements Transformer {
   name = "deepseek";
 
+  // Store current request context for response processing
+  private currentSessionId: string | undefined;
+  private currentIsV4Pro: boolean = false;
+
+  /**
+   * Extract session ID from request metadata
+   * Uses the same pattern as token-speed plugin: /_session_([a-f0-9-]+)/i
+   */
+  private extractSessionId(request: UnifiedChatRequest): string | undefined {
+    try {
+      const userId = (request as any)?.metadata?.user_id;
+      if (userId && typeof userId === 'string') {
+        const match = userId.match(/_session_([a-f0-9-]+)/i);
+        return match ? match[1] : undefined;
+      }
+    } catch (error) {
+      // Ignore extraction errors
+    }
+    return undefined;
+  }
+
+  /**
+   * Check if the model is deepseek-v4-pro
+   */
+  private isV4ProModel(request: UnifiedChatRequest): boolean {
+    const model = (request as any).model;
+    return typeof model === 'string' && model.includes('deepseek-v4-pro');
+  }
+
   async transformRequestIn(request: UnifiedChatRequest): Promise<UnifiedChatRequest> {
+    // Enforce max_tokens limit for DeepSeek
     if (request.max_tokens && request.max_tokens > 8192) {
       request.max_tokens = 8192; // DeepSeek has a max token limit of 8192
     }
+
+    // Store context for response processing
+    this.currentSessionId = this.extractSessionId(request);
+    this.currentIsV4Pro = this.isV4ProModel(request);
+
+    // DeepSeek V4 Pro: Inject cached reasoning_content if available
+    if (this.currentSessionId && this.currentIsV4Pro) {
+      const cachedReasoning = reasoningCacheService.get(this.currentSessionId);
+      if (cachedReasoning && Array.isArray(request.messages)) {
+        // Append assistant message with reasoning_content
+        request.messages.push({
+          role: 'assistant',
+          content: '',
+          reasoning_content: cachedReasoning
+        });
+      }
+    }
+
     return request;
   }
 
   async transformResponseOut(response: Response): Promise<Response> {
+    // Use session ID and model info from request processing
+    const sessionId = this.currentSessionId;
+    const isV4ProRequest = this.currentIsV4Pro;
+
+    // Clear context for next request
+    this.currentSessionId = undefined;
+    this.currentIsV4Pro = false;
+
     if (response.headers.get("Content-Type")?.includes("application/json")) {
       const jsonResponse = await response.json();
+      // Handle non-streaming response: cache reasoning_content if present
+      if (sessionId && isV4ProRequest && jsonResponse.choices?.[0]?.message?.reasoning_content) {
+        reasoningCacheService.set(sessionId, jsonResponse.choices[0].message.reasoning_content);
+      }
       // Handle non-streaming response if needed
       return new Response(JSON.stringify(jsonResponse), {
         status: response.status,
@@ -102,6 +163,11 @@ export class DeepseekTransformer implements Transformer {
                 ) {
                   context.setReasoningComplete(true);
                   const signature = Date.now().toString();
+
+                  // Cache reasoning content for DeepSeek V4 Pro
+                  if (sessionId && isV4ProRequest && context.reasoningContent()) {
+                    reasoningCacheService.set(sessionId, context.reasoningContent());
+                  }
 
                   // Create a new chunk with thinking block
                   const thinkingChunk = {

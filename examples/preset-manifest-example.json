@@ -14,7 +14,7 @@
     {
       "name": "deepseek",
       "api_base_url": "https://api.deepseek.com",
-      "models": ["deepseek-v3", "deepseek-chat"]
+      "models": ["deepseek-v3", "deepseek-chat", "deepseek-v4-pro"]
     }
   ],
   "schema": [

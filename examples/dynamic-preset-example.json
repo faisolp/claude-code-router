@@ -104,6 +104,10 @@
           {
             "label": "DeepSeek-Chat",
             "value": "deepseek-chat"
+          },
+          {
+            "label": "DeepSeek-V4-Pro",
+            "value": "deepseek-v4-pro"
           }
         ]
       },

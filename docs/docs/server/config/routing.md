@@ -44,6 +44,29 @@ Route thinking-intensive tasks to a more capable model:
 }
 ```
 
+**Using DeepSeek V4 Pro for Thinking:**
+
+DeepSeek V4 Pro supports advanced thinking mode with reasoning content. The router will automatically handle caching and passing reasoning content between requests:
+
+```json
+{
+  "Router": {
+    "think": "deepseek,deepseek-v4-pro"
+  },
+  "Providers": [
+    {
+      "name": "deepseek",
+      "api_base_url": "https://api.deepseek.com",
+      "api_key": "YOUR_API_KEY",
+      "models": ["deepseek-chat", "deepseek-v3", "deepseek-v4-pro"],
+      "transformers": ["deepseek"]
+    }
+  ]
+}
+```
+
+**Note:** DeepSeek V4 Pro requires reasoning content from previous responses to be sent back in subsequent requests. This is handled automatically by the DeepSeek transformer.
+
 ### Long Context
 
 Route requests with long context:

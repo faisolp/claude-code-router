@@ -88,7 +88,8 @@
       "api_key": "sk-",
       "models": [
         "deepseek-chat",
-        "deepseek-reasoner"
+        "deepseek-reasoner",
+        "deepseek-v4-pro"
       ],
       "transformer": {
         "use": [
