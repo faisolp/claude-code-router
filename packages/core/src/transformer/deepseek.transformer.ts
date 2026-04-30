@@ -57,6 +57,7 @@ export class DeepseekTransformer implements Transformer {
     }
 
     // Fallback: inject from session cache for any assistant message still missing reasoning_content
+    // DeepSeek requires reasoning_content on ALL assistant messages in multi-turn conversations
     if (this.currentSessionId && this.currentIsV4Pro) {
       const cachedReasoning = reasoningCacheService.get(this.currentSessionId);
       if (cachedReasoning && Array.isArray(request.messages)) {
@@ -64,7 +65,7 @@ export class DeepseekTransformer implements Transformer {
           const msg = request.messages[i] as any;
           if (msg.role === 'assistant' && !msg.reasoning_content) {
             msg.reasoning_content = cachedReasoning;
-            break;
+            // Don't break - inject reasoning_content into ALL assistant messages missing it
           }
         }
       }
