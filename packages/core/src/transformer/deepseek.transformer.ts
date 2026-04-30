@@ -44,16 +44,29 @@ export class DeepseekTransformer implements Transformer {
     this.currentSessionId = this.extractSessionId(request);
     this.currentIsV4Pro = this.isV4ProModel(request);
 
-    // DeepSeek V4 Pro: Inject cached reasoning_content if available
+    // DeepSeek V4 Pro: Convert thinking blocks to reasoning_content for multi-turn conversations.
+    // AnthropicTransformer puts thinking content into msg.thinking.content (unified format).
+    // DeepSeek requires this as reasoning_content on the same message object.
+    if (this.currentIsV4Pro && Array.isArray(request.messages)) {
+      for (const msg of request.messages as any[]) {
+        if (msg.role === 'assistant' && msg.thinking?.content) {
+          msg.reasoning_content = msg.thinking.content;
+          delete msg.thinking;
+        }
+      }
+    }
+
+    // Fallback: inject from session cache for any assistant message still missing reasoning_content
     if (this.currentSessionId && this.currentIsV4Pro) {
       const cachedReasoning = reasoningCacheService.get(this.currentSessionId);
       if (cachedReasoning && Array.isArray(request.messages)) {
-        // Append assistant message with reasoning_content
-        request.messages.push({
-          role: 'assistant',
-          content: '',
-          reasoning_content: cachedReasoning
-        });
+        for (let i = request.messages.length - 1; i >= 0; i--) {
+          const msg = request.messages[i] as any;
+          if (msg.role === 'assistant' && !msg.reasoning_content) {
+            msg.reasoning_content = cachedReasoning;
+            break;
+          }
+        }
       }
     }
 
@@ -71,9 +84,11 @@ export class DeepseekTransformer implements Transformer {
 
     if (response.headers.get("Content-Type")?.includes("application/json")) {
       const jsonResponse = await response.json();
-      // Handle non-streaming response: cache reasoning_content if present
+      // Handle non-streaming response: cache reasoning_content and track tool_calls
       if (sessionId && isV4ProRequest && jsonResponse.choices?.[0]?.message?.reasoning_content) {
-        reasoningCacheService.set(sessionId, jsonResponse.choices[0].message.reasoning_content);
+        const message = jsonResponse.choices[0].message;
+        const hasToolCalls = Boolean(message.tool_calls && message.tool_calls.length > 0);
+        reasoningCacheService.set(sessionId, message.reasoning_content, hasToolCalls);
       }
       // Handle non-streaming response if needed
       return new Response(JSON.stringify(jsonResponse), {
@@ -90,6 +105,7 @@ export class DeepseekTransformer implements Transformer {
       const encoder = new TextEncoder();
       let reasoningContent = "";
       let isReasoningComplete = false;
+      let currentResponseHasToolCalls = false; // Track if CURRENT response has tool calls
       let buffer = ""; // 用于缓冲不完整的数据
 
       const stream = new ReadableStream({
@@ -128,6 +144,11 @@ export class DeepseekTransformer implements Transformer {
               try {
                 const data = JSON.parse(line.slice(6));
 
+                // Detect tool calls in the response
+                if (data.choices?.[0]?.delta?.tool_calls) {
+                  currentResponseHasToolCalls = true;
+                }
+
                 // Extract reasoning_content from delta
                 if (data.choices?.[0]?.delta?.reasoning_content) {
                   context.appendReasoningContent(
@@ -164,10 +185,8 @@ export class DeepseekTransformer implements Transformer {
                   context.setReasoningComplete(true);
                   const signature = Date.now().toString();
 
-                  // Cache reasoning content for DeepSeek V4 Pro
-                  if (sessionId && isV4ProRequest && context.reasoningContent()) {
-                    reasoningCacheService.set(sessionId, context.reasoningContent());
-                  }
+                  // Note: We'll cache reasoning_content at stream end with tool_calls info
+                  // Don't cache here yet as we need to check for tool_calls throughout the stream
 
                   // Create a new chunk with thinking block
                   const thinkingChunk = {
@@ -256,6 +275,11 @@ export class DeepseekTransformer implements Transformer {
                   controller.enqueue(encoder.encode(line + "\n"));
                 }
               }
+            }
+
+            // Cache reasoning_content and update tool_calls flag when stream ends
+            if (sessionId && isV4ProRequest && reasoningContent) {
+              reasoningCacheService.set(sessionId, reasoningContent, currentResponseHasToolCalls);
             }
           } catch (error) {
             console.error("Stream error:", error);
