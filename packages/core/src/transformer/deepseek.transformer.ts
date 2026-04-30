@@ -176,26 +176,24 @@ export class DeepseekTransformer implements Transformer {
                   return;
                 }
 
-                // Check if reasoning is complete (when delta has content but no reasoning_content)
+                // Reasoning is complete when content OR tool_calls arrive (no more reasoning_content)
+                // Must also handle tool_calls case: DeepSeek may skip text content entirely
                 if (
-                  data.choices?.[0]?.delta?.content &&
+                  (data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.tool_calls) &&
                   context.reasoningContent() &&
                   !context.isReasoningComplete()
                 ) {
                   context.setReasoningComplete(true);
                   const signature = Date.now().toString();
 
-                  // Note: We'll cache reasoning_content at stream end with tool_calls info
-                  // Don't cache here yet as we need to check for tool_calls throughout the stream
-
-                  // Create a new chunk with thinking block
+                  // Emit a minimal thinking+signature chunk (no tool_calls/content here).
+                  // tool_calls or content will be forwarded in the original data chunk below.
                   const thinkingChunk = {
                     ...data,
                     choices: [
                       {
                         ...data.choices[0],
                         delta: {
-                          ...data.choices[0].delta,
                           content: null,
                           thinking: {
                             content: context.reasoningContent(),
@@ -205,8 +203,6 @@ export class DeepseekTransformer implements Transformer {
                       },
                     ],
                   };
-                  delete thinkingChunk.choices[0].delta.reasoning_content;
-                  // Send the thinking chunk
                   const thinkingLine = `data: ${JSON.stringify(
                     thinkingChunk
                   )}\n\n`;

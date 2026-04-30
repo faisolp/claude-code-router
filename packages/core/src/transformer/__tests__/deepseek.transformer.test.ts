@@ -280,3 +280,89 @@ describe("Full pipeline: AnthropicRequest → reasoning_content in DeepSeek requ
     expect(assistantMsg.tool_calls[0].function.name).toBe("search");
   });
 });
+
+// ─── transformResponseOut: signature emitted for tool_calls responses ─────────
+
+describe("DeepseekTransformer.transformResponseOut streaming", () => {
+  let deepseekTransformer: DeepseekTransformer;
+
+  beforeEach(() => {
+    deepseekTransformer = new DeepseekTransformer();
+  });
+
+  /** Build a fake SSE streaming Response from an array of delta objects */
+  function makeStreamResponse(deltas: object[]): Response {
+    const lines = deltas.map((d) => `data: ${JSON.stringify(d)}\n\n`).join("");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(lines));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+
+  /** Collect all SSE events from a Response stream */
+  async function collectSSEEvents(response: Response): Promise<any[]> {
+    const text = await response.text();
+    const events: any[] = [];
+    for (const line of text.split("\n")) {
+      if (line.startsWith("data: ") && line.trim() !== "data: [DONE]") {
+        try { events.push(JSON.parse(line.slice(6))); } catch { /* skip */ }
+      }
+    }
+    return events;
+  }
+
+  test("emits thinking+signature chunk when reasoning ends with tool_calls (no content)", async () => {
+    const fakeResponse = makeStreamResponse([
+      { choices: [{ delta: { reasoning_content: "I will search for files" }, finish_reason: null }] },
+      { choices: [{ delta: { reasoning_content: " using the tool" }, finish_reason: null }] },
+      // No content chunk — tool_calls arrive directly after reasoning
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: '{"cmd":"ls"}' } }] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ]);
+
+    const transformed = await deepseekTransformer.transformResponseOut(fakeResponse);
+    const events = await collectSSEEvents(transformed);
+
+    // Must have a thinking chunk with both content and signature
+    const thinkingEvent = events.find(
+      (e) => e.choices?.[0]?.delta?.thinking?.signature
+    );
+    expect(thinkingEvent).toBeDefined();
+    expect(thinkingEvent.choices[0].delta.thinking.content).toBe(
+      "I will search for files using the tool"
+    );
+    expect(thinkingEvent.choices[0].delta.thinking.signature).toBeTruthy();
+
+    // tool_calls must still be forwarded
+    const toolCallEvent = events.find((e) => e.choices?.[0]?.delta?.tool_calls);
+    expect(toolCallEvent).toBeDefined();
+  });
+
+  test("emits thinking+signature chunk when reasoning ends with content (original behavior)", async () => {
+    const fakeResponse = makeStreamResponse([
+      { choices: [{ delta: { reasoning_content: "My reasoning" }, finish_reason: null }] },
+      { choices: [{ delta: { content: "My answer" }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]);
+
+    const transformed = await deepseekTransformer.transformResponseOut(fakeResponse);
+    const events = await collectSSEEvents(transformed);
+
+    const thinkingEvent = events.find(
+      (e) => e.choices?.[0]?.delta?.thinking?.signature
+    );
+    expect(thinkingEvent).toBeDefined();
+    expect(thinkingEvent.choices[0].delta.thinking.content).toBe("My reasoning");
+
+    // Content chunk must also be forwarded
+    const contentEvent = events.find((e) => e.choices?.[0]?.delta?.content === "My answer");
+    expect(contentEvent).toBeDefined();
+  });
+});
