@@ -365,4 +365,26 @@ describe("DeepseekTransformer.transformResponseOut streaming", () => {
     const contentEvent = events.find((e) => e.choices?.[0]?.delta?.content === "My answer");
     expect(contentEvent).toBeDefined();
   });
+
+  test("emits thinking+signature chunk when stream ends with only reasoning (no content/tool_calls)", async () => {
+    const fakeResponse = makeStreamResponse([
+      { choices: [{ delta: { reasoning_content: "Only reasoning" }, finish_reason: null }] },
+      { choices: [{ delta: { reasoning_content: " no conclusion" }, finish_reason: null }] },
+      // Stream ends directly after reasoning without content or tool_calls
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+    ]);
+
+    const transformed = await deepseekTransformer.transformResponseOut(fakeResponse);
+    const events = await collectSSEEvents(transformed);
+
+    // Must have a thinking chunk with both content and signature
+    const thinkingEvent = events.find(
+      (e) => e.choices?.[0]?.delta?.thinking?.signature
+    );
+    expect(thinkingEvent).toBeDefined();
+    expect(thinkingEvent.choices[0].delta.thinking.content).toBe(
+      "Only reasoning no conclusion"
+    );
+    expect(thinkingEvent.choices[0].delta.thinking.signature).toBeTruthy();
+  });
 });

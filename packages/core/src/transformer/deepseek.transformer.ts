@@ -242,6 +242,28 @@ export class DeepseekTransformer implements Transformer {
                 if (buffer.trim()) {
                   processBuffer(buffer, controller, encoder);
                 }
+
+                // Edge case: if stream ends with only reasoning_content (no content/tool_calls),
+                // emit the signature chunk now to ensure AnthropicTransformer recognizes it
+                if (reasoningContent && !isReasoningComplete) {
+                  const signature = Date.now().toString();
+                  const thinkingChunk = {
+                    choices: [
+                      {
+                        delta: {
+                          content: null,
+                          thinking: {
+                            content: reasoningContent,
+                            signature: signature,
+                          },
+                        },
+                      },
+                    ],
+                  };
+                  const thinkingLine = `data: ${JSON.stringify(thinkingChunk)}\n\n`;
+                  controller.enqueue(encoder.encode(thinkingLine));
+                }
+
                 break;
               }
 
