@@ -56,19 +56,23 @@ export class DeepseekTransformer implements Transformer {
       }
     }
 
-    // Fallback: inject from session cache for any assistant message still missing reasoning_content
+    // Fallback: inject reasoning_content for any assistant message still missing it
     // DeepSeek requires reasoning_content on ALL assistant messages in multi-turn conversations
-    if (this.currentSessionId && this.currentIsV4Pro) {
-      const cachedReasoning = reasoningCacheService.get(this.currentSessionId);
-      if (cachedReasoning && Array.isArray(request.messages)) {
-        for (let i = request.messages.length - 1; i >= 0; i--) {
-          const msg = request.messages[i] as any;
-          if (msg.role === 'assistant' && !msg.reasoning_content) {
-            msg.reasoning_content = cachedReasoning;
-            // Don't break - inject reasoning_content into ALL assistant messages missing it
-          }
+    if (this.currentIsV4Pro && Array.isArray(request.messages)) {
+      const cachedReasoning = this.currentSessionId ? reasoningCacheService.get(this.currentSessionId) : undefined;
+      console.error('[DeepSeek fallback] sessionId:', this.currentSessionId, 'hasCachedReasoning:', !!cachedReasoning, 'messagesCount:', request.messages?.length);
+
+      let injectedCount = 0;
+      for (let i = request.messages.length - 1; i >= 0; i--) {
+        const msg = request.messages[i] as any;
+        if (msg.role === 'assistant' && !msg.reasoning_content) {
+          // Use cached reasoning if available, otherwise use empty string as fallback
+          // DeepSeek requires reasoning_content to be present even if empty
+          msg.reasoning_content = cachedReasoning || '';
+          injectedCount++;
         }
       }
+      console.error('[DeepSeek fallback] injected reasoning_content into', injectedCount, 'messages');
     }
 
     return request;

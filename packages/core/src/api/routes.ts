@@ -213,6 +213,8 @@ async function processRequestTransformers(
   bypass = shouldBypassTransformers(provider, transformer, body);
 
   if (bypass) {
+    // Log bypass mode for debugging
+    context?.req?.log?.info?.(`Bypass enabled for provider ${provider.name} with transformer ${transformer.name}`);
     if (headers instanceof Headers) {
       headers.delete("content-length");
     } else {

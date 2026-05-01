@@ -28,7 +28,11 @@ export class AnthropicTransformer implements Transformer {
   async auth(request: any, provider: LLMProvider): Promise<any> {
     const headers: Record<string, string | undefined> = {};
 
-    if (this.useBearer) {
+    // GLM API (z.ai) uses Bearer token authentication
+    const isGLM = provider.name === 'glm' ||
+                  (provider.baseUrl && provider.baseUrl.includes('z.ai'));
+
+    if (this.useBearer || isGLM) {
       headers["authorization"] = `Bearer ${provider.apiKey}`;
       headers["x-api-key"] = undefined;
     } else {
